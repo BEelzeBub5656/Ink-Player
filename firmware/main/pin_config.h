@@ -34,12 +34,12 @@
 #define I2C_SDA      15
 #define I2C_SCL      32
 
-/* ── 墨水屏规格 ── */
-#define EPD_WIDTH    800
-#define EPD_HEIGHT   480
-#define EPD_BUF_SIZE (EPD_WIDTH * EPD_HEIGHT / 8)  // 48000 bytes
+/* ── 墨水屏 HINK-E075A07-A0 ── */
+#define EPD_WIDTH    880
+#define EPD_HEIGHT   528
+#define EPD_BUF_SIZE (EPD_WIDTH * EPD_HEIGHT / 8)  // 58080 bytes
 
 /* ── 状态栏 ── */
-#define STATUSBAR_H   40   // 顶部 40px 状态栏
+#define STATUSBAR_H   44   // 顶部 44px 状态栏
 #define FONT_W         8
 #define FONT_H        16

@@ -173,7 +173,7 @@ void task_menu(void *pv)
             /* 仅选中项变化 → 局部重绘高亮 */
             else if (g_menu.current_page != PAGE_IDLE && g_menu.item_count > 0) {
                 ui_draw_menu(&g_menu);
-                display_partial_refresh(0, 80, 200, g_menu.item_count * 32);
+                display_partial_refresh(0, 80, 320, g_menu.item_count * 32);
             }
         }
     }
