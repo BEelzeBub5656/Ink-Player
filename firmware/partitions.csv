@@ -1,8 +1,8 @@
 # Name,    Type, SubType,   Offset,    Size,       Flags
-# Ink-Player A/B OTA 分区表 (4MB Flash)
+# Ink-Player A/B OTA 分区表 (8MB Flash, PICO-V3-02)
 nvs,       data, nvs,       0x9000,    0x6000,
 otadata,   data, ota,       0xF000,    0x2000,
 phy_init,  data, phy,       0x11000,   0x1000,
-factory,   app,  factory,   0x12000,   0x160000,
-ota_0,     app,  ota_0,     0x172000,  0x134000,
-ota_1,     app,  ota_1,     0x2A6000,  0x134000,
+factory,   app,  factory,   0x12000,   0x180000,
+ota_0,     app,  ota_0,     0x192000,  0x320000,
+ota_1,     app,  ota_1,     0x4B2000,  0x320000,
