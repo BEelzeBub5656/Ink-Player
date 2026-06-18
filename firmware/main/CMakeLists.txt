@@ -1,0 +1,27 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "encoder.c"
+        "display.c"
+        "menu.c"
+        "wifi_app.c"
+        "mqtt_app.c"
+        "audio.c"
+        "doubao_ws.c"
+        "fonts.c"
+        "ui_render.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        driver
+        esp_wifi
+        esp_event
+        nvs_flash
+        esp_timer
+        esp_http_client
+        esp_https_ota
+        mqtt
+        lwip
+        esp_adc
+    PRIV_REQUIRES
+        spi_flash
+)

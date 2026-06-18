@@ -1,4 +1,4 @@
-# Ink-Player ESP32-PICO-V3 配置
+# Ink-Player ESP32-PICO-V3-02 配置
 # 放入项目根目录, idf.py build 时自动应用
 
 ##### 芯片 #####
@@ -44,14 +44,18 @@ CONFIG_LWIP_DNS_SUPPORT_MDNS_QUERIES=y
 ##### I2S #####
 CONFIG_I2S_ISR_IRAM_SAFE=n
 
-##### SPI (墨水屏) #####
+##### SPI DMA — 墨水屏 DMA 传输 #####
+CONFIG_SPI_MASTER_IN_IRAM=n
 CONFIG_SPI_MASTER_ISR_IN_IRAM=n
 
 ##### ULP 协处理器 #####
 CONFIG_ULP_COPROC_ENABLED=y
 
-##### ESP-SR 唤醒词 #####
-CONFIG_ESP_SR_ENABLED=y
+##### PCNT 编码器 #####
+CONFIG_PCNT_ISR_IRAM_SAFE=n
+
+##### ESP-SR 唤醒词 (豆包自带 VAD, 暂不需要) #####
+# CONFIG_ESP_SR_ENABLED is not set
 
 ##### FreeRTOS #####
 CONFIG_FREERTOS_HZ=1000
