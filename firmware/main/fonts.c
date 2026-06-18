@@ -103,7 +103,8 @@ const uint8_t font8x16[][16] = {
             0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // ?
     [63] = {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
             0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // @ (placeholder)
-    // Fill the rest with spaces
+    /* 确保数组覆盖 ASCII 32-126 (95 个条目, 索引 0-94) */
+    [94] = {0},
 };
 
 /* ── 在帧缓冲中画一个字符 ── */
@@ -112,6 +113,7 @@ void font_draw_char(uint8_t *buf, int x, int y,
 {
     if (c < 32 || c > 126) return;
     int idx = c - 32;
+    if (idx >= (int)(sizeof(font8x16) / sizeof(font8x16[0]))) return;
     const uint8_t *glyph = font8x16[idx];
 
     for (int row = 0; row < 16; row++) {

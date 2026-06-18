@@ -16,7 +16,6 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -108,9 +107,9 @@ void display_init(void)
     };
     ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &dev_cfg, &spi));
 
-    /* 帧缓冲 (PSRAM) */
-    bw_buf  = heap_caps_malloc(EPD_BUF_SIZE, MALLOC_CAP_SPIRAM);
-    red_buf = heap_caps_malloc(EPD_BUF_SIZE, MALLOC_CAP_SPIRAM);
+    /* 帧缓冲 (DMA 可访问的内部 SRAM — SPI DMA 无法直接读 PSRAM) */
+    bw_buf  = heap_caps_malloc(EPD_BUF_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    red_buf = heap_caps_malloc(EPD_BUF_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
     assert(bw_buf && red_buf);
     memset(bw_buf,  0xFF, EPD_BUF_SIZE);  // 全白
     memset(red_buf, 0x00, EPD_BUF_SIZE);  // 无红
@@ -120,12 +119,12 @@ void display_init(void)
     vTaskDelay(pdMS_TO_TICKS(10));
     gpio_set_level(EPD_RST, 1);
     vTaskDelay(pdMS_TO_TICKS(10));
-    while (gpio_get_level(EPD_BUSY) == 0) { vTaskDelay(1); }
+    while (gpio_get_level(EPD_BUSY) == 0) { vTaskDelay(pdMS_TO_TICKS(1)); }
 
     /* SSD1677 初始化序列 */
     spi_cmd(CMD_SW_RESET);
     vTaskDelay(pdMS_TO_TICKS(10));
-    while (gpio_get_level(EPD_BUSY) == 0) { vTaskDelay(1); }
+    while (gpio_get_level(EPD_BUSY) == 0) { vTaskDelay(pdMS_TO_TICKS(1)); }
 
     // 数据进入模式: X 递增, Y 递减
     spi_cmd(CMD_DATA_ENTRY);

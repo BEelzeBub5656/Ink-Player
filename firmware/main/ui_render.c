@@ -24,8 +24,10 @@ extern menu_state_t g_menu;
 /* ── 启动画面 ── */
 void ui_draw_splash(void)
 {
-    uint8_t *buf = display_get_bw_buffer();
+    uint8_t *buf  = display_get_bw_buffer();
+    uint8_t *red  = display_get_red_buffer();
     memset(buf, 0xFF, EPD_BUF_SIZE);  // 全白
+    memset(red, 0x00, EPD_BUF_SIZE);  // 无红
 
     font_draw_string(buf, EPD_WIDTH/2 - 60, EPD_HEIGHT/2 - 24,
                      "Ink-Player", EPD_WIDTH, 0);
@@ -37,11 +39,13 @@ void ui_draw_splash(void)
 void ui_draw_statusbar(const char *time_str, int wifi_on, int bat_pct)
 {
     uint8_t *buf = display_get_bw_buffer();
+    uint8_t *red = display_get_red_buffer();
     char sb[64];
 
-    /* 清状态栏区域 */
+    /* 清状态栏区域 (BW + 红) */
     for (int row = 0; row < STATUSBAR_H; row++) {
         memset(buf + row * (EPD_WIDTH/8), 0xFF, EPD_WIDTH/8);
+        memset(red + row * (EPD_WIDTH/8), 0x00, EPD_WIDTH/8);
     }
 
     /* 底部横线 */
@@ -67,7 +71,9 @@ void ui_draw_statusbar(const char *time_str, int wifi_on, int bat_pct)
 void ui_draw_menu(const menu_state_t *m)
 {
     uint8_t *buf = display_get_bw_buffer();
+    uint8_t *red = display_get_red_buffer();
     memset(buf, 0xFF, EPD_BUF_SIZE);
+    memset(red, 0x00, EPD_BUF_SIZE);  // 无红
 
     /* 标题 */
     char title[32];
@@ -107,7 +113,9 @@ void ui_draw_menu(const menu_state_t *m)
 void ui_draw_page(menu_state_t *m)
 {
     uint8_t *buf = display_get_bw_buffer();
+    uint8_t *red = display_get_red_buffer();
     memset(buf, 0xFF, EPD_BUF_SIZE);
+    memset(red, 0x00, EPD_BUF_SIZE);  // 无红
 
     switch (m->current_page) {
     case PAGE_WEATHER:

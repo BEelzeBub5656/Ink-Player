@@ -5,7 +5,6 @@ idf_component_register(
         "display.c"
         "menu.c"
         "wifi_app.c"
-        "mqtt_app.c"
         "audio.c"
         "doubao_ws.c"
         "fonts.c"
