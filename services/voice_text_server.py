@@ -17,6 +17,8 @@ import io
 import json
 import struct
 import uuid
+import queue
+import asyncio
 import logging
 import subprocess
 import urllib.request
@@ -24,12 +26,24 @@ import urllib.error
 from datetime import datetime
 
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [voice] %(message)s")
 log = logging.getLogger("voice")
 
 BEARER_TOKEN = os.environ.get("INK_VOICE_TOKEN", "ink-player-v1-token-change-me")
+
+# SSE 连接池
+_sse_queues: list[queue.Queue] = []
+
+def _broadcast_sse(data: dict) -> None:
+    """Push event to all connected SSE clients."""
+    msg = json.dumps(data, ensure_ascii=False)
+    for q in _sse_queues:
+        try:
+            q.put_nowait(msg)
+        except queue.Full:
+            pass
 
 # 豆包/火山 Flash ASR 配置 (极速版，同步返回)
 # 新版控制台：只需要 X-Api-Key + X-Api-Resource-Id
@@ -183,6 +197,7 @@ async def voice_text(request: Request):
 
     log.info(f"text [{device_id}/{source}]: {text[:80]}")
     event_id = store_in_hermes(text, device_id, source, ts)
+    _broadcast_sse({"text": text, "source": source, "device": device_id, "at": datetime.now().isoformat()})
 
     return JSONResponse(content={
         "ok": True,
@@ -254,6 +269,7 @@ async def voice_stream(request: Request):
     # Hermes memory
     ts = int(datetime.now().timestamp())
     event_id = store_in_hermes(text, device_id, source, ts)
+    _broadcast_sse({"text": text, "source": source, "device": device_id, "at": datetime.now().isoformat()})
 
     return JSONResponse(content={
         "ok": True,
@@ -261,6 +277,33 @@ async def voice_stream(request: Request):
         "text": text,
         "display_text": "",
     })
+
+
+@app.get("/ink-player/events")
+async def sse_events(request: Request):
+    """GET /ink-player/events — Server-Sent Events stream."""
+    q: queue.Queue = queue.Queue()
+    _sse_queues.append(q)
+
+    async def event_stream():
+        try:
+            yield "data: {}\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    msg = q.get(timeout=15)
+                    yield f"data: {msg}\n\n"
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+        finally:
+            _sse_queues.remove(q)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/health")
