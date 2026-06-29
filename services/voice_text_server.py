@@ -1,0 +1,274 @@
+"""Ink-Player voice ingress server.
+
+Endpoints:
+  POST /ink-player/api/voice_text   — JSON text upload (ESP32 local ASR result)
+  POST /ink-player/api/voice_stream — chunked PCM audio stream → server-side ASR
+
+Usage:
+    python voice_text_server.py
+    # Listens on 127.0.0.1:8460
+
+Environment:
+    INK_VOICE_TOKEN: Bearer token for ESP32 auth (required)
+"""
+
+import os
+import io
+import json
+import struct
+import uuid
+import logging
+import subprocess
+import urllib.request
+import urllib.error
+from datetime import datetime
+
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [voice] %(message)s")
+log = logging.getLogger("voice")
+
+BEARER_TOKEN = os.environ.get("INK_VOICE_TOKEN", "ink-player-v1-token-change-me")
+
+# 豆包/火山 Flash ASR 配置 (极速版，同步返回)
+# 新版控制台：只需要 X-Api-Key + X-Api-Resource-Id
+DOUBAO_ASR_APP_ID = "826048352"
+DOUBAO_ASR_API_KEY = "ba6b8007-5bbb-4df0-a4a2-ca5675fe8639"
+DOUBAO_ASR_URL = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash"
+DOUBAO_ASR_RESOURCE = "volc.bigasr.auc_turbo"
+
+# v1 限制
+MAX_AUDIO_BYTES = 512 * 1024     # 512KB raw PCM (~16s @16kHz mono)
+MAX_AUDIO_SECS = 15
+
+app = FastAPI(title="Ink-Player Voice Ingress")
+
+
+# ── Auth ──────────────────────────────────────────────
+
+def validate_token(auth_header: str | None) -> bool:
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return False
+    return auth_header.removeprefix("Bearer ").strip() == BEARER_TOKEN
+
+
+# ── WAV helpers ───────────────────────────────────────
+
+def pcm_to_wav(pcm: bytes, sample_rate: int = 16000, channels: int = 1) -> bytes:
+    """Wrap raw PCM s16le in a WAV container."""
+    bits = 16
+    byte_rate = sample_rate * channels * bits // 8
+    block_align = channels * bits // 8
+    data_size = len(pcm)
+
+    buf = io.BytesIO()
+    buf.write(b"RIFF")
+    buf.write(struct.pack("<I", 36 + data_size))
+    buf.write(b"WAVE")
+    buf.write(b"fmt ")
+    buf.write(struct.pack("<I", 16))            # fmt chunk size
+    buf.write(struct.pack("<H", 1))             # PCM
+    buf.write(struct.pack("<H", channels))
+    buf.write(struct.pack("<I", sample_rate))
+    buf.write(struct.pack("<I", byte_rate))
+    buf.write(struct.pack("<H", block_align))
+    buf.write(struct.pack("<H", bits))
+    buf.write(b"data")
+    buf.write(struct.pack("<I", data_size))
+    buf.write(pcm)
+    return buf.getvalue()
+
+
+# ── 豆包 Flash ASR ────────────────────────────────────
+
+def call_doubao_asr(wav: bytes) -> str | None:
+    """POST WAV (base64) to 豆包 Flash ASR (极速版), return recognized text."""
+    import base64
+    payload = {
+        "user": {"uid": DOUBAO_ASR_APP_ID},
+        "audio": {"data": base64.b64encode(wav).decode()},
+        "request": {"model_name": "bigmodel"},
+    }
+    try:
+        req = urllib.request.Request(
+            DOUBAO_ASR_URL,
+            data=json.dumps(payload).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "X-Api-Key": DOUBAO_ASR_API_KEY,
+                "X-Api-Resource-Id": DOUBAO_ASR_RESOURCE,
+                "X-Api-Request-Id": str(uuid.uuid4()),
+                "X-Api-Sequence": "-1",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode())
+            code = resp.headers.get("X-Api-Status-Code", "")
+            log.info(f"ASR response: status={code}, has_text={'text' in str(result)}")
+            text = result.get("result", {}).get("text", "").strip()
+            if not text and result.get("result", {}).get("utterances"):
+                text = result["result"]["utterances"][0].get("text", "").strip()
+            return text or None
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()[:300]
+        log.warning(f"ASR HTTP {e.code}: {body}")
+        return None
+    except Exception as e:
+        log.error(f"ASR call failed: {e}")
+        return None
+
+
+# ── Hermes memory ─────────────────────────────────────
+
+def store_in_hermes(text: str, device_id: str, source: str, ts: int) -> str | None:
+    """Write recognized text to Hermes memory via one-shot CLI."""
+    event_id = str(uuid.uuid4())
+    dt = datetime.fromtimestamp(ts) if ts else datetime.now()
+
+    prompt = (
+        f"保存这条语音识别结果到记忆: "
+        f"用户通过Ink-Player墨水屏设备说了: 「{text}」。"
+        f"设备ID: {device_id}, 来源: {source}, "
+        f"时间: {dt.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+
+    try:
+        env = os.environ.copy()
+        result = subprocess.run(
+            ["hermes", "-z", prompt, "--yolo", "-t", ""],
+            capture_output=True, text=True, timeout=30,
+            env=env, cwd="/root",
+        )
+        if result.returncode == 0:
+            log.info(f"Stored in Hermes: {text[:50]}... (event={event_id})")
+            return event_id
+        else:
+            log.warning(f"Hermes one-shot failed: {result.stderr[:200]}")
+            return None
+    except Exception as e:
+        log.error(f"Hermes unreachable: {e}")
+        return None
+
+
+# ── Endpoints ─────────────────────────────────────────
+
+@app.post("/ink-player/api/voice_text")
+async def voice_text(request: Request):
+    """Accept recognized speech text from ESP32 (JSON).
+
+    Headers:
+        Authorization: Bearer <token>
+        Content-Type: application/json
+    Body:
+        {"device_id":"ink-player-v1","source":"esp32_flash_asr","text":"你好","ts":1780000000}
+    """
+    auth = request.headers.get("Authorization")
+    if not validate_token(auth):
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    device_id = body.get("device_id", "").strip()
+    source = body.get("source", "").strip()
+    text = body.get("text", "").strip()
+    ts = body.get("ts", 0)
+
+    if not device_id or not source or not text:
+        raise HTTPException(status_code=400, detail="Missing required fields")
+
+    log.info(f"text [{device_id}/{source}]: {text[:80]}")
+    event_id = store_in_hermes(text, device_id, source, ts)
+
+    return JSONResponse(content={
+        "ok": True,
+        "event_id": event_id or "local-only",
+        "display_text": "",
+    })
+
+
+@app.post("/ink-player/api/voice_stream")
+async def voice_stream(request: Request):
+    """Accept chunked PCM audio from ESP32, run server-side ASR.
+
+    Headers:
+        Authorization: Bearer <token>
+        Content-Type: audio/L16; rate=16000; channels=1
+        Transfer-Encoding: chunked
+        X-Ink-Device-Id: ink-player-v1
+        X-Ink-Source: esp32_i2s_pcm
+        X-Ink-Sample-Rate: 16000
+        X-Ink-Channels: 1
+        X-Ink-Format: pcm_s16le
+
+    Body: raw PCM s16le chunks, total max ~512KB / 15s.
+    Returns: {"ok":true, "event_id":"...", "text":"识别文本", "display_text":""}
+    """
+    auth = request.headers.get("Authorization")
+    if not validate_token(auth):
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    device_id = request.headers.get("X-Ink-Device-Id", "ink-player-v1").strip()
+    source = request.headers.get("X-Ink-Source", "esp32_i2s_pcm").strip()
+    try:
+        sample_rate = int(request.headers.get("X-Ink-Sample-Rate", "16000"))
+        channels = int(request.headers.get("X-Ink-Channels", "1"))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid sample rate or channels header")
+
+    # Stream body in
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > MAX_AUDIO_BYTES:
+            log.warning(f"stream [{device_id}]: exceeded max {MAX_AUDIO_BYTES} bytes")
+            raise HTTPException(status_code=413, detail="Audio too large")
+
+    pcm = b"".join(chunks)
+    if total < 1600:  # < 50ms — too short
+        raise HTTPException(status_code=400, detail="Audio too short")
+
+    log.info(f"stream [{device_id}]: {total} bytes PCM ({total / sample_rate / 2:.1f}s) -> ASR")
+
+    # PCM → WAV
+    wav = pcm_to_wav(pcm, sample_rate=sample_rate, channels=channels)
+
+    # ASR
+    text = call_doubao_asr(wav)
+    if not text:
+        return JSONResponse(content={
+            "ok": True,
+            "event_id": None,
+            "text": "",
+            "display_text": "",
+        })
+
+    log.info(f"stream [{device_id}]: ASR → 「{text}」")
+
+    # Hermes memory
+    ts = int(datetime.now().timestamp())
+    event_id = store_in_hermes(text, device_id, source, ts)
+
+    return JSONResponse(content={
+        "ok": True,
+        "event_id": event_id or "local-only",
+        "text": text,
+        "display_text": "",
+    })
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    log.info(f"Starting voice server on 127.0.0.1:8460, token={'*'*8}")
+    uvicorn.run(app, host="127.0.0.1", port=8460)
