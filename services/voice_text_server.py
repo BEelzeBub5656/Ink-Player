@@ -196,8 +196,8 @@ async def voice_text(request: Request):
         raise HTTPException(status_code=400, detail="Missing required fields")
 
     log.info(f"text [{device_id}/{source}]: {text[:80]}")
-    event_id = store_in_hermes(text, device_id, source, ts)
     _broadcast_sse({"text": text, "source": source, "device": device_id, "at": datetime.now().isoformat()})
+    event_id = store_in_hermes(text, device_id, source, ts)
 
     return JSONResponse(content={
         "ok": True,
@@ -265,11 +265,11 @@ async def voice_stream(request: Request):
         })
 
     log.info(f"stream [{device_id}]: ASR → 「{text}」")
+    _broadcast_sse({"text": text, "source": source, "device": device_id, "at": datetime.now().isoformat()})
 
     # Hermes memory
     ts = int(datetime.now().timestamp())
     event_id = store_in_hermes(text, device_id, source, ts)
-    _broadcast_sse({"text": text, "source": source, "device": device_id, "at": datetime.now().isoformat()})
 
     return JSONResponse(content={
         "ok": True,
