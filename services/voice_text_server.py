@@ -336,6 +336,62 @@ async def health():
     return {"status": "ok"}
 
 
+# ── DLNA 音频转码代理 ──────────────────────────────────
+
+@app.get("/ink-player/api/audio_proxy.wav")
+def audio_proxy(request: Request):
+    """GET /ink-player/api/audio_proxy.wav?url=<percent-encoded-media-url>
+    
+    将任意 HTTP 媒体 URL（MP3/AAC/FLAC 等）通过 ffmpeg 实时转码为
+    16kHz mono 16-bit WAV，流式返回给 ESP32 播放器。
+    """
+    raw_url = request.query_params.get("url", "")
+    if not raw_url:
+        raise HTTPException(status_code=400, detail="Missing url parameter")
+
+    # 限制只允许 http/https，防止 SSRF
+    if not raw_url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Only http/https URLs supported")
+
+    log.info(f"audio_proxy: {raw_url[:150]}")
+
+    def generate():
+        proc = None
+        try:
+            proc = subprocess.Popen(
+                [
+                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
+                    "-timeout", "15000000",   # 15s 连接超时 (微秒)
+                    "-i", raw_url,
+                    "-vn", "-ac", "1", "-ar", "16000", "-f", "wav", "pipe:1",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            for chunk in iter(lambda: proc.stdout.read(65536), b""):
+                yield chunk
+        except GeneratorExit:
+            pass  # 客户端断开 → finally 杀 ffmpeg
+        except Exception as e:
+            log.warning(f"audio_proxy error: {e}")
+        finally:
+            if proc:
+                proc.kill()
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    pass
+
+    return StreamingResponse(
+        generate(),
+        media_type="audio/wav",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
     log.info(f"Starting voice server on 127.0.0.1:8460, token={'*'*8}")
