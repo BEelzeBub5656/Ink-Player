@@ -18,6 +18,7 @@ import json
 import struct
 import uuid
 import queue
+import time
 import asyncio
 import threading
 import logging
@@ -31,6 +32,22 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [voice] %(message)s")
 log = logging.getLogger("voice")
+
+# ── 持久化 ASR 文本日志 ────────────────────────────────
+ASR_LOG_DIR = "/var/log/ink-player"
+ASR_LOG_FILE = os.path.join(ASR_LOG_DIR, "asr_text.log")
+os.makedirs(ASR_LOG_DIR, exist_ok=True)
+
+def _append_asr_log(device_id: str, source: str, text: str, ts: float) -> None:
+    """Append one line to the persistent ASR text log."""
+    line = json.dumps({
+        "ts": datetime.fromtimestamp(ts).isoformat(),
+        "device": device_id,
+        "source": source,
+        "text": text,
+    }, ensure_ascii=False)
+    with open(ASR_LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
 
 BEARER_TOKEN = os.environ.get("INK_VOICE_TOKEN", "ink-player-v1-token-change-me")
 
@@ -155,7 +172,7 @@ def store_in_hermes(text: str, device_id: str, source: str, ts: int) -> str | No
         env = os.environ.copy()
         result = subprocess.run(
             ["hermes", "-z", prompt, "--yolo", "-t", ""],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=10,
             env=env, cwd="/root",
         )
         if result.returncode == 0:
@@ -200,6 +217,7 @@ async def voice_text(request: Request):
 
     log.info(f"text [{device_id}/{source}]: {text[:80]}")
     _broadcast_sse({"text": text, "source": source, "device": device_id, "at": datetime.now().isoformat()})
+    _append_asr_log(device_id, source, text, ts or time.time())
     event_id = store_in_hermes(text, device_id, source, ts)
 
     return JSONResponse(content={
@@ -269,6 +287,7 @@ async def voice_stream(request: Request):
 
     log.info(f"stream [{device_id}]: ASR → 「{text}」")
     _broadcast_sse({"text": text, "source": source, "device": device_id, "at": datetime.now().isoformat()})
+    _append_asr_log(device_id, source, text, time.time())
 
     # Hermes memory — fire-and-forget (don't block the HTTP response)
     ts = int(datetime.now().timestamp())
