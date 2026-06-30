@@ -121,6 +121,8 @@ def call_doubao_asr(wav: bytes) -> str | None:
             result = json.loads(resp.read().decode())
             code = resp.headers.get("X-Api-Status-Code", "")
             log.info(f"ASR response: status={code}, has_text={'text' in str(result)}")
+            # DEBUG: dump raw response for field inspection
+            log.info(f"ASR raw keys: {list(result.keys())}  result keys: {list(result.get('result', {}).keys()) if isinstance(result.get('result'), dict) else type(result.get('result')).__name__}")
             text = result.get("result", {}).get("text", "").strip()
             if not text and result.get("result", {}).get("utterances"):
                 text = result["result"]["utterances"][0].get("text", "").strip()
