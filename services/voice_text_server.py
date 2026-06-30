@@ -19,6 +19,7 @@ import struct
 import uuid
 import queue
 import asyncio
+import threading
 import logging
 import subprocess
 import urllib.request
@@ -269,13 +270,16 @@ async def voice_stream(request: Request):
     log.info(f"stream [{device_id}]: ASR → 「{text}」")
     _broadcast_sse({"text": text, "source": source, "device": device_id, "at": datetime.now().isoformat()})
 
-    # Hermes memory
+    # Hermes memory — fire-and-forget (don't block the HTTP response)
     ts = int(datetime.now().timestamp())
-    event_id = store_in_hermes(text, device_id, source, ts)
+    threading.Thread(
+        target=store_in_hermes, args=(text, device_id, source, ts),
+        daemon=True
+    ).start()
 
     return JSONResponse(content={
         "ok": True,
-        "event_id": event_id or "local-only",
+        "event_id": "async-pending",
         "text": text,
         "display_text": "",
     })
