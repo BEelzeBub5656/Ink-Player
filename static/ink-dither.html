@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>墨水屏三色抖动</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;background:#1a1a1a;color:#ccc;display:flex;flex-direction:column;align-items:center;padding:20px;min-height:100vh}
+h1{color:#c0392b;margin-bottom:4px}
+.sub{font-size:12px;color:#888;margin-bottom:20px}
+.drop{width:600px;height:200px;border:2px dashed #555;border-radius:12px;display:flex;align-items:center;justify-content:center;color:#777;cursor:pointer;transition:.2s;margin-bottom:20px;text-align:center;line-height:1.6}
+.drop:hover{border-color:#c0392b;color:#c0392b}
+.controls{margin-bottom:20px;display:flex;gap:12px;align-items:center}
+.controls label{font-size:13px;color:#888}
+.controls input,.controls select{background:#333;border:1px solid #555;color:#ccc;padding:4px 8px;border-radius:4px;font-size:13px;width:70px}
+button{background:#c0392b;color:#fff;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:14px}
+button:hover{background:#e74c3c}
+.output{display:flex;gap:20px;flex-wrap:wrap;justify-content:center}
+.output .pair{text-align:center}
+.output canvas{border:1px solid #444;border-radius:4px;max-width:400px}
+.output .label{font-size:11px;color:#888;margin-top:4px}
+.info{font-size:11px;color:#666;margin-top:20px;max-width:600px;line-height:1.6}
+</style>
+</head>
+<body>
+<h1>墨水屏三色抖动</h1>
+<div class="sub">Floyd-Steinberg 误差扩散 · 黑白红三色 · 880×528</div>
+
+<div class="drop" id="drop">
+  拖拽图片到此处<br>或点击选择文件<br><small>支持 JPG/PNG/WebP</small>
+</div>
+
+<div class="controls">
+  <label>宽度 <input type="number" id="w" value="880"></label>
+  <label>高度 <input type="number" id="h" value="528"></label>
+  <button onclick="process()">转换</button>
+</div>
+
+<div class="output" id="output"></div>
+<div class="info">
+  Floyd-Steinberg 误差扩散 · 三色调色板：纸白 #f5f0e8 / 墨黑 #222 / 红 #c0392b<br>
+  所有运算在浏览器本地完成，图片不上传服务器。
+</div>
+
+<input type="file" id="file" accept="image/*" hidden>
+
+<script>
+const drop = document.getElementById('drop');
+const file = document.getElementById('file');
+let currentImage = null;
+
+drop.onclick = () => file.click();
+drop.ondragover = e => { e.preventDefault(); drop.style.borderColor='#c0392b'; };
+drop.ondragleave = () => drop.style.borderColor='#555';
+drop.ondrop = e => {
+  e.preventDefault();
+  drop.style.borderColor='#555';
+  loadImage(e.dataTransfer.files[0]);
+};
+file.onchange = () => loadImage(file.files[0]);
+
+function loadImage(f) {
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const img = new Image();
+    img.onload = () => {
+      currentImage = img;
+      document.getElementById('w').value = img.width;
+      document.getElementById('h').value = img.height;
+      drop.innerHTML = `已加载: ${f.name} (${img.width}×${img.height})`;
+      process();
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(f);
+}
+
+function process() {
+  if (!currentImage) return alert('请先拖入图片');
+  const w = parseInt(document.getElementById('w').value) || 880;
+  const h = parseInt(document.getElementById('h').value) || 528;
+  dither(currentImage, w, h);
+}
+
+function dither(img, w, h) {
+  // Draw original
+  const origC = document.createElement('canvas');
+  origC.width = w; origC.height = h;
+  const ctx = origC.getContext('2d');
+  ctx.drawImage(img, 0, 0, w, h);
+  const src = ctx.getImageData(0, 0, w, h);
+
+  // Floyd-Steinberg on ImageData
+  const px = src.data;
+  const target = new Uint8ClampedArray(px.length);
+
+  // Palette: [white, black, red]
+  const pal = [[245,240,232],[34,34,34],[192,57,43]];
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      // Find nearest palette color
+      let bestD = Infinity, best = 0;
+      for (let p = 0; p < 3; p++) {
+        const dr = px[i] - pal[p][0], dg = px[i+1] - pal[p][1], db = px[i+2] - pal[p][2];
+        const d = dr*dr + dg*dg + db*db;
+        if (d < bestD) { bestD = d; best = p; }
+      }
+      const rErr = px[i] - pal[best][0];
+      const gErr = px[i+1] - pal[best][1];
+      const bErr = px[i+2] - pal[best][2];
+      target[i] = pal[best][0]; target[i+1] = pal[best][1]; target[i+2] = pal[best][2]; target[i+3] = 255;
+
+      // Diffuse error
+      if (x + 1 < w) {
+        const n = ((y)*w + (x+1))*4;
+        px[n]   += rErr * 7/16;
+        px[n+1] += gErr * 7/16;
+        px[n+2] += bErr * 7/16;
+      }
+      if (y + 1 < h) {
+        if (x > 0) {
+          const n = ((y+1)*w + (x-1))*4;
+          px[n]   += rErr * 3/16;
+          px[n+1] += gErr * 3/16;
+          px[n+2] += bErr * 3/16;
+        }
+        const n = ((y+1)*w + x)*4;
+        px[n]   += rErr * 5/16;
+        px[n+1] += gErr * 5/16;
+        px[n+2] += bErr * 5/16;
+        if (x + 1 < w) {
+          const n2 = ((y+1)*w + (x+1))*4;
+          px[n2]   += rErr * 1/16;
+          px[n2+1] += gErr * 1/16;
+          px[n2+2] += bErr * 1/16;
+        }
+      }
+    }
+  }
+
+  // Show result
+  const outC = document.createElement('canvas');
+  outC.width = w; outC.height = h;
+  const octx = outC.getContext('2d');
+  octx.putImageData(new ImageData(target, w, h), 0, 0);
+
+  const outDiv = document.getElementById('output');
+  outDiv.innerHTML = '';
+
+  // Original
+  const pair1 = document.createElement('div'); pair1.className = 'pair';
+  pair1.appendChild(origC);
+  pair1.innerHTML += '<div class="label">原图</div>';
+  outDiv.appendChild(pair1);
+
+  // Dithered
+  const pair2 = document.createElement('div'); pair2.className = 'pair';
+  pair2.appendChild(outC);
+  pair2.innerHTML += '<div class="label">三色抖动</div>';
+  outDiv.appendChild(pair2);
+}
+</script>
+</body>
+</html>

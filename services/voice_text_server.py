@@ -336,6 +336,101 @@ async def health():
     return {"status": "ok"}
 
 
+# ── 图片上传 + 三色抖动 ────────────────────────────────
+
+from fastapi import UploadFile, File, Form
+
+IMAGES_DIR = "/var/www/ink-player/images/uploaded"
+os.makedirs(IMAGES_DIR, exist_ok=True)
+
+
+@app.post("/ink-player/api/image/upload")
+async def image_upload(
+    request: Request,
+    file: UploadFile = File(...),
+):
+    """POST /ink-player/api/image/upload
+    
+    上传任意图片 → Floyd-Steinberg 三色抖动 (880×528) → 保存 → 返回 URL
+    
+    微信小程序调用示例:
+      wx.uploadFile({
+        url: 'https://beelzebub.top/ink-player/api/image/upload',
+        filePath: tempFilePath,
+        name: 'file',
+        header: { 'Authorization': 'Bearer <token>' },
+        success: res => { const data = JSON.parse(res.data); ... }
+      })
+    """
+    auth = request.headers.get("Authorization")
+    if not validate_token(auth):
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # 读上传的图片
+    contents = await file.read()
+    if len(contents) > 10 * 1024 * 1024:  # 10MB 上限
+        raise HTTPException(status_code=413, detail="Image too large (>10MB)")
+
+    # PIL 打开
+    from PIL import Image
+    import numpy as np
+    import io as stdio
+
+    img = Image.open(stdio.BytesIO(contents)).convert("RGB")
+
+    # 缩放到 880×528（保持比例，居中裁剪）
+    tw, th = 880, 528
+    img_ratio = img.width / img.height
+    target_ratio = tw / th
+    if img_ratio > target_ratio:
+        new_w = int(img.height * target_ratio)
+        img = img.crop(((img.width - new_w) // 2, 0, (img.width + new_w) // 2, img.height))
+    else:
+        new_h = int(img.width / target_ratio)
+        img = img.crop((0, (img.height - new_h) // 2, img.width, (img.height + new_h) // 2))
+    img = img.resize((tw, th), Image.LANCZOS)
+
+    # Floyd-Steinberg 三色抖动
+    arr = np.array(img, dtype=np.float32)
+    pal = np.array([[245, 240, 232], [34, 34, 34], [192, 57, 43]], dtype=np.float32)
+    h, w, _ = arr.shape
+    for y in range(h):
+        for x in range(w):
+            old = arr[y, x].copy()
+            idx = np.argmin(np.sum((pal - old) ** 2, axis=1))
+            err = old - pal[idx]
+            arr[y, x] = pal[idx]
+            if x + 1 < w:
+                arr[y, x + 1] += err * 7 / 16
+            if y + 1 < h:
+                if x > 0:
+                    arr[y + 1, x - 1] += err * 3 / 16
+                arr[y + 1, x] += err * 5 / 16
+                if x + 1 < w:
+                    arr[y + 1, x + 1] += err * 1 / 16
+    result = Image.fromarray(arr.clip(0, 255).astype(np.uint8))
+
+    # 保存
+    img_id = str(uuid.uuid4())[:8]
+    filename = f"{img_id}.png"
+    filepath = os.path.join(IMAGES_DIR, filename)
+    result.save(filepath, "PNG")
+
+    # 可选：MQTT 推送给 ESP32
+    # img_url = f"https://beelzebub.top/ink-player/images/uploaded/{filename}"
+    # mqtt_publish("desk/display", json.dumps({"image_url": img_url}))
+
+    log.info(f"image_upload: {file.filename} → {filename} ({tw}×{th})")
+
+    return JSONResponse(content={
+        "ok": True,
+        "image_id": img_id,
+        "url": f"https://beelzebub.top/ink-player/images/uploaded/{filename}",
+        "width": tw,
+        "height": th,
+    })
+
+
 # ── DLNA 音频转码代理 ──────────────────────────────────
 
 @app.get("/ink-player/api/audio_proxy.wav")
